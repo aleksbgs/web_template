@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
+use actix_web::web::head;
 
 
 #[derive(Serialize,Deserialize,Debug,Clone)]
@@ -87,9 +88,46 @@ async fn create_task(app_state: web::Data<AppState>,task: web::Json<Task>) -> im
     let _ = db.save_to_file();
     HttpResponse::Ok().finish()
 }
+async fn read_task(app_state: web::Data<AppState>,id: web::Path<u64>) -> impl Responder {
+    let mut db = app_state.db.lock().unwrap();
 
-
-
-fn main() {
-    println!("Hello, world!");
+    match db.get(&id.into_inner()) {
+        Some(task) => HttpResponse::Ok().json(task),
+        None => HttpResponse::NotFound().finish()
+    }
 }
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    let db = match Database::load_from_file() {
+        Ok(db) => db,
+        Err(_) => Database::new()
+    };
+
+    let data = web::Data::new(AppState {
+        db: Mutex::new(db)
+    });
+
+    HttpServer::new(move || {
+        App::new()
+            .wrap(
+                Cors::permissive()
+                    .allowed_origin_fn(|origin, _req_head| {
+                        origin.as_bytes().starts_with(b"http://localhost") || origin == "null"
+                    })
+                    .allowed_methods(vec!["GET", "POST", "PUT", "DELETE"])
+                    .allowed_headers(vec![header::AUTHORIZATION, header::ACCEPT])
+                    .allowed_header(header::CONTENT_TYPE)
+                    .supports_credentials()
+                    .max_age(3600)
+            )
+            .app_data(data.clone())
+            .route("/task", web::post().to(create_task))
+            .route("/task/{id}", web::get().to(read_task))
+    })
+        .bind("127.0.0.1:8080")?
+        .run()
+        .await
+}
+
+
